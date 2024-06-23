@@ -4,6 +4,9 @@
 #include <inttypes.h>
 #include <string.h>
 #include <stddef.h>
+#include <sys/types.h>
+#include <sys/stat.h>
+#include <unistd.h>
 
 // ABI compatibility with HVQM4 1.3 is still kinda broken,
 // but native decoding is bit-perfect *shrug*
@@ -871,11 +874,10 @@ static void setHVQPlaneDesc(SeqObj *seqobj, uint8_t plane_idx, uint8_t h_samp, u
 
 // HACK: assumes 4:2:0
 __attribute__((unused))
-static void dumpYUV(Player *player, char const *path)
+static void dumpYUV(Player *player, FILE *f)
 {
-    FILE *f = fopen(path, "wb+");
     uint32_t w = player->seqobj.width, h = player->seqobj.height;
-    fprintf(f, "P5\n%u %u\n255\n", w, h * 2);
+    fprintf(f, "FRAME\n");
     uint8_t const *p = player->present;
     for (int plane = 0; plane < 2; ++plane)
     {
@@ -885,12 +887,11 @@ static void dumpYUV(Player *player, char const *path)
             {
                 if (plane == 0 || j < w / 2)
                     fputc(*p++, f);
-                else
-                    fputc(0, f);
+//                else
+//                    fputc(0, f);
             }
         }
     }
-    fclose(f);
 }
 
 // HACK: assumes 4:2:0, assumes JPEG color space
@@ -2075,7 +2076,7 @@ enum FrameType
 #endif
 
 
-static void decode_video(Player *player, FILE *infile, uint32_t gop_start, uint16_t frame_type, uint32_t frame_size)
+static void decode_video(Player *player, FILE *infile, FILE *outfile, uint32_t gop_start, uint16_t frame_type, uint32_t frame_size)
 {
     // getBit() and getByte() overread by up to 3 bytes
     uint32_t overread = 3;
@@ -2119,13 +2120,14 @@ static void decode_video(Player *player, FILE *infile, uint32_t gop_start, uint1
     //if (frame_type == I_FRAME)
     {
         char name[50];
-        sprintf(name, "output/video_rgb_%u.ppm", gop_start + disp_id);
+        //sprintf(name, "output/video_rgb_%06u.ppm", gop_start + disp_id);
         //char type = "ipb"[(frame_type >> 4) - 1];
         //sprintf(name, "output/video_rgb_%u_%u_%c.ppm", gop, disp_id, type);
         //printf("writing frame to %s...\n", name);
-        dumpRGB(player, name);
+        //dumpRGB(player, name);
         //sprintf(name, "output/video_yuv_%u_%u_%c.ppm", gop, disp_id, type);
-        //dumpYUV(player, name);
+        //sprintf(name, "output/video_yuv_%06u.ppm", gop_start + disp_id);
+        dumpYUV(player, outfile);
     }
 
     // swap present and future
@@ -2355,7 +2357,7 @@ int main(int argc, char **argv)
     printf("h4m 'HVQM4 1.3/1.5' decoder 0.4 by flacs/hcs\n\n");
     if (argc != 3)
     {
-        fprintf(stderr, "usage: %s file.h4m output.wav\n", argv[0]);
+        fprintf(stderr, "usage: %s file.h4m output.y4m\n", argv[0]);
         exit(EXIT_FAILURE);
     }
 
@@ -2381,14 +2383,15 @@ int main(int argc, char **argv)
     display_header(&header);
 
     /* open output */
-    FILE *outfile = fopen(argv[2], "wb");
-    if (!outfile)
+    FILE *f = fopen(argv[2], "wb+");
+    if (!f)
     {
         fprintf(stderr, "error opening %s\n", argv[2]);
         exit(EXIT_FAILURE);
     }
 
     /* fill in the space that we'll put the header in later */
+    /*
     uint8_t riff_header[0x2c];
     memset(riff_header, 0, sizeof(riff_header));
     if (0x2c != fwrite(riff_header, 1, 0x2c, outfile))
@@ -2396,6 +2399,20 @@ int main(int argc, char **argv)
         fprintf(stderr, "error writing riff header\n");
         exit(EXIT_FAILURE);
     }
+
+    struct stat st = {0};
+    if (stat("output", &st) == -1) {
+        mkdir("output", 0700);
+    }
+    */
+
+    /*
+    char outname[50];
+    sprintf(outname, "output.y4m");
+    FILE *f = fopen(outname, "wb+");
+    */
+    // F26733:892
+    fprintf(f, "YUV4MPEG2 W%u H%u F30000:1001 Ip A0:0 C420jpeg XYSCSS=420JPEG\n", header.hres, header.vres);
 
 #ifndef NATIVE
     if (header.version == HVQM4_13)
@@ -2469,7 +2486,7 @@ int main(int argc, char **argv)
 #ifdef VERBOSE_PRINT
                 printf("video frame %d/%d\n", (int)vid_frame_count, (int)expected_vid_frame_count);
 #endif
-                decode_video(&player, infile, total_vid_frames, frame_id2, frame_size);
+                decode_video(&player, infile, f, total_vid_frames, frame_id2, frame_size);
             }
             else if (frame_id1 == 0)
             {
@@ -2536,6 +2553,7 @@ int main(int argc, char **argv)
         total_sample_count += block_sample_count;
     }
 
+    fclose(f);
     free(player.seqobj.state);
     free(player.past);
     free(player.present);
@@ -2550,6 +2568,7 @@ int main(int argc, char **argv)
 
     printf("%"PRIu32" samples\n", total_sample_count);
 
+    /*
     // generate header
     make_wav_header(riff_header, total_sample_count, header.audio_srate, header.audio_channels);
     fseek(outfile, 0, SEEK_SET);
@@ -2563,6 +2582,7 @@ int main(int argc, char **argv)
         fprintf(stderr, "error finishing output\n");
         exit(EXIT_FAILURE);
     }
+    */
 
     printf("Done!\n");
 }
